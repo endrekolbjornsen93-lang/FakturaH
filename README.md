@@ -1,25 +1,37 @@
-# 🎈 Blank app template
+# Optimera fakturabehandling
 
-A simple Streamlit app template for you to modify!
+Streamlit-appen leser én eller flere Optimera-fakturaer fra PDF og kobler
+fakturalinjene mot kategoriseringsdata fra en Excel-fil. Resultatet kan lastes
+ned som en Excel-arbeidsbok.
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
+## Kjør appen
 
-### How to run it on your own machine
+Installer avhengighetene:
 
-Prerequisite: install `uv` if you don't already have it.
-
+```powershell
+python -m pip install -r "requirements (1).txt"
 ```
-$ curl -LsSf https://astral.sh/uv/install.sh | sh
+
+Start appen:
+
+```powershell
+streamlit run "OptimeraFaktura_Streamlit (1) (1).py"
 ```
 
-1. Sync the dependencies
+## Inndata og behandling
 
-   ```
-   $ uv sync
-   ```
+- Last opp én eller flere PDF-fakturaer.
+- Last opp en `.xlsx`- eller `.xlsm`-kategoriseringsfil med arket `Linjer`.
+- Varelinjer matches mot kategoriseringsfilen med NOBB-nummer eller artikkelnummer.
+- Etter at fakturalinjene er vist i appen, velger brukeren én eller flere rader
+  og tildeler kode `0`, `01`, `05` eller `12`.
+- Kode `01` gir fag `RD`, `05` gir `BE`, og `12` gir `TØ`. Kode `0` lar fag stå
+  tomt, men varelinjens beløp blir fortsatt med i summeringen.
+- Kategoriene `Spesifikasjon` og `Frikode` hentes fra arket `Linjer`.
+- Summeringsarket grupperer etter fakturanummer, Spesifikasjon, Fag og Frikode.
+- Appen søker ikke etter varer med variasjon. Resultatfilen inneholder likevel
+  arket `Varer med variasjon`, som alltid er tomt.
+- Opplastede filer lagres i en midlertidig arbeidsmappe under behandlingen.
 
-2. Run the app
-
-   ```
-   $ uv run streamlit run streamlit_app.py
-   ```
+Excel-resultatet inneholder arkene `Kategorisert`, `Vareoversikt`,
+`Ukjente varer` og `Varer med variasjon`.
