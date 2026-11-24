@@ -18,7 +18,6 @@ from pypdf import PdfReader
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
 
 warnings.filterwarnings('ignore')
 
@@ -767,20 +766,6 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
     for _col in df_varelinjer_kat.columns:
         df_varelinjer_kat[_col] = df_varelinjer_kat[_col].astype(str).replace("nan", "").fillna("")
 
-    # Les også "Varer med Variasjon" fanen
-    try:
-        df_flere_kat = pd.read_excel(varelinjer_kategorisert_fil, sheet_name="Varer med Variasjon", engine="openpyxl", dtype=str)
-        print(f"  ✓ Leste {len(df_flere_kat)} rader fra 'Varer med Variasjon'")
-
-        # --- PATCH: tving også her alle kolonner til tekst ---
-        if not df_flere_kat.empty:
-            for _col in df_flere_kat.columns:
-                df_flere_kat[_col] = df_flere_kat[_col].astype(str).replace("nan", "").fillna("")
-
-    except Exception as e:
-        print(f"  ⚠ Kunne ikke lese 'Varer med Variasjon': {e}")
-        df_flere_kat = pd.DataFrame()  # Tom hvis fanen ikke finnes
-
     # Trim kolonnenavn
     df_varelinjer_parsed.columns = df_varelinjer_parsed.columns.map(lambda x: str(x).strip())
 
@@ -822,11 +807,7 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
     kol_vare_nobbnr = finn_kolonnenavn(df_varelinjer_kat, "nobbnr")
     kol_vare_artnr = finn_kolonnenavn(df_varelinjer_kat, "artnr")
     kol_spesifikasjon = finn_kolonnenavn(df_varelinjer_kat, "spesifikasjon")
-    kol_fag = finn_kolonnenavn(df_varelinjer_kat, "fag")
-    kol_område = finn_kolonnenavn(df_varelinjer_kat, "område")
     kol_frikode = finn_kolonnenavn(df_varelinjer_kat, "frikode")
-    kol_vare_fakturanr = finn_kolonnenavn(df_varelinjer_kat, "fakturanummer")
-    kol_vare_beskrivelse = finn_kolonnenavn(df_varelinjer_kat, "beskrivelse")
 
     # Normaliser ID-kolonner i varelinjer_kat
     if kol_vare_nobbnr and kol_vare_nobbnr in df_varelinjer_kat.columns:
@@ -834,14 +815,13 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
     if kol_vare_artnr and kol_vare_artnr in df_varelinjer_kat.columns:
         df_varelinjer_kat[kol_vare_artnr] = normaliser_id(df_varelinjer_kat[kol_vare_artnr].astype(str))
 
-    kategori_kolonner = ["Spesifikasjon", "Fag", "Område", "Frikode"]
+    kategori_kolonner = ["Spesifikasjon", "Frikode"]
 
     # Trekk kategorier inn på parsed data
     def hent_kategorier(rad):
         nobb = rad.get(kol_nobbnr) if kol_nobbnr else None
         art = rad.get(kol_artnr) if kol_artnr else None
-        besk = rad.get(kol_beskrivelse) if kol_beskrivelse else None
-        tom = pd.Series([None] * 4, index=kategori_kolonner)
+        tom = pd.Series({"Spesifikasjon": None, "Frikode": None})
 
         # Normaliser verdier for matching - håndter tall riktig
         def normalize_id(val):
@@ -857,39 +837,23 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
         nobb_norm = normalize_id(nobb)
         art_norm = normalize_id(art)
 
+        def category_values(match):
+            return pd.Series({
+                "Spesifikasjon": match[kol_spesifikasjon] if kol_spesifikasjon else None,
+                "Frikode": match[kol_frikode] if kol_frikode else None,
+            })
+
         # Prioriter Nobbnr først i "Linjer"
         if nobb_norm and kol_vare_nobbnr:
             treff = df_varelinjer_kat[df_varelinjer_kat[kol_vare_nobbnr] == nobb_norm]
             if not treff.empty:
-                data = treff[[kol_spesifikasjon, kol_fag, kol_område, kol_frikode]].iloc[0]
-                data.index = tom.index
-                return data
+                return category_values(treff.iloc[0])
 
         # Hvis ingen Nobbnr-treff, prøv Artnr i "Linjer"
         if art_norm and kol_vare_artnr:
             treff = df_varelinjer_kat[df_varelinjer_kat[kol_vare_artnr] == art_norm]
             if not treff.empty:
-                data = treff[[kol_spesifikasjon, kol_fag, kol_område, kol_frikode]].iloc[0]
-                data.index = tom.index
-                return data
-
-        # Hvis INGEN match i "Linjer", prøv eksakt beskrivelsesmatch i "Varer med Variasjon"
-        if besk and pd.notna(besk) and not df_flere_kat.empty:
-            besk_norm = str(besk).strip()
-            kol_fler_besk = finn_kolonnenavn(df_flere_kat, "beskrivelse")
-            if kol_fler_besk:
-                treff_besk = df_flere_kat[df_flere_kat[kol_fler_besk].astype(str).str.strip() == besk_norm]
-                if not treff_besk.empty:
-                    # Finn kategorikolonner i df_flere_kat
-                    kol_fler_spes = finn_kolonnenavn(df_flere_kat, "spesifikasjon")
-                    kol_fler_fag = finn_kolonnenavn(df_flere_kat, "fag")
-                    kol_fler_omr = finn_kolonnenavn(df_flere_kat, "område")
-                    kol_fler_fri = finn_kolonnenavn(df_flere_kat, "frikode")
-
-                    if all([kol_fler_spes, kol_fler_fag, kol_fler_omr, kol_fler_fri]):
-                        data = treff_besk[[kol_fler_spes, kol_fler_fag, kol_fler_omr, kol_fler_fri]].iloc[0]
-                        data.index = tom.index
-                        return data
+                return category_values(treff.iloc[0])
 
         return tom
 
@@ -901,12 +865,20 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
     print(f"  ✓ {antall_med_kat} av {antall_total} varelinjer fikk kategorier")
     print(f"  → {antall_total - antall_med_kat} varelinjer uten kategorier")
 
+    if "Fag" not in df_varelinjer_parsed.columns:
+        df_varelinjer_parsed["Fag"] = ""
+
     # Bygg Vareoversikt
     vareoversikt = pd.DataFrame({
+        "Varelinje": (
+            df_varelinjer_parsed["Varelinje"]
+            if "Varelinje" in df_varelinjer_parsed.columns
+            else range(1, len(df_varelinjer_parsed) + 1)
+        ),
         "Fakturanr": df_varelinjer_parsed[kol_fakturanr],
         "Spesifikasjon": df_varelinjer_parsed["Spesifikasjon"],
         "Fag": df_varelinjer_parsed["Fag"],
-        "Område": df_varelinjer_parsed["Område"],
+        "Område": "",
         "Frikode": df_varelinjer_parsed["Frikode"],
         "Beskrivelse": df_varelinjer_parsed[kol_beskrivelse],
         "Beløp": pd.to_numeric(df_varelinjer_parsed[kol_beløp].apply(
@@ -915,7 +887,7 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
         "Artnr": df_varelinjer_parsed[kol_artnr] if kol_artnr in df_varelinjer_parsed.columns else "",
     })
 
-    # Ukjente varer - varer UTEN match (alle 4 kategorier tomme/None)
+    # Ukjente varer - varer uten Spesifikasjon eller Frikode
     def er_tom(val):
         """Sjekk om verdi er tom (None, NaN, tom string, 'nan' som string)"""
         if pd.isna(val):
@@ -926,8 +898,6 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
 
     ukjente_mask = (
             vareoversikt['Spesifikasjon'].apply(er_tom) &
-            vareoversikt['Fag'].apply(er_tom) &
-            vareoversikt['Område'].apply(er_tom) &
             vareoversikt['Frikode'].apply(er_tom)
     )
 
@@ -941,235 +911,62 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
     else:
         print(f"  ✓ Alle varer fikk kategorier")
 
-    # Definer desired_cols tidlig
-    desired_cols_var = ["Fakturanr", "Beløp", "Nobbnr", "Artnr", "Spesifikasjon", "Fag", "Område", "Frikode",
-                        "Beskrivelse"]
+    # Behold arket i resultatfilen, men gjør det tomt uten å slå opp variasjonsvarer.
+    variasjonskolonner = [
+        "Fakturanr", "Beløp", "Nobbnr", "Artnr", "Spesifikasjon",
+        "Fag", "Område", "Frikode", "Beskrivelse",
+    ]
+    variasjoner = pd.DataFrame(columns=variasjonskolonner)
 
     # Debug: Vis hva vi fikk i Vareoversikt
     if debug:
         print(f"  Debug: Vareoversikt kolonner: {vareoversikt.columns.tolist()}")
         print(f"  Debug: Første 3 Nobbnr fra Vareoversikt: {vareoversikt['Nobbnr'].head(3).tolist()}")
 
-    # Varer med variasjon - vis fakturanr, beløp og alle unike kombinasjoner
-    if not df_flere_kat.empty:
-        df_flere_kat.columns = df_flere_kat.columns.map(lambda x: str(x).strip())
-
-        # Normaliser ID-kolonner
-        kol_fler_nobbnr = finn_kolonnenavn(df_flere_kat, "nobbnr")
-        kol_fler_artnr = finn_kolonnenavn(df_flere_kat, "artnr")
-        kol_fler_spes = finn_kolonnenavn(df_flere_kat, "spesifikasjon")
-        kol_fler_fag = finn_kolonnenavn(df_flere_kat, "fag")
-        kol_fler_omr = finn_kolonnenavn(df_flere_kat, "område")
-        kol_fler_fri = finn_kolonnenavn(df_flere_kat, "frikode")
-        kol_fler_besk = finn_kolonnenavn(df_flere_kat, "beskrivelse")
-
-        # Debug: Vis hva vi fant
-        if debug:
-            print(f"  Debug: Kolonne i 'Varer med Variasjon': Nobbnr={kol_fler_nobbnr}, Artnr={kol_fler_artnr}")
-
-        if kol_fler_nobbnr and kol_fler_nobbnr in df_flere_kat.columns:
-            df_flere_kat[kol_fler_nobbnr] = normaliser_id(df_flere_kat[kol_fler_nobbnr])
-            if debug:
-                print(
-                    f"  Debug: Første 5 Nobbnr fra 'Varer med Variasjon': {df_flere_kat[kol_fler_nobbnr].head().tolist()}")
-        if kol_fler_artnr and kol_fler_artnr in df_flere_kat.columns:
-            df_flere_kat[kol_fler_artnr] = normaliser_id(df_flere_kat[kol_fler_artnr])
-
-        # Samle alle rader som kombinerer fakturadata med variasjonskombinasjonene
-        var_resultat_rows = []
-
-        def normalize_id_for_match(val):
-            if pd.isna(val):
-                return None
-            if isinstance(val, (int, float)):
-                if val == int(val):
-                    return str(int(val)).strip()
-                else:
-                    return str(val).strip()
-            return str(val).strip()
-
-        # Debug: Tell hvor mange vi finner
-        match_count = 0
-        total_checked = 0
-
-        for _, rad in vareoversikt.iterrows():
-            faktura = rad['Fakturanr']
-            nobb_raw = rad.get('Nobbnr')
-            art_raw = rad.get('Artnr')
-            nobb = normalize_id_for_match(nobb_raw)
-            art = normalize_id_for_match(art_raw)
-            belop = rad['Beløp']
-            besk_faktura = rad['Beskrivelse']
-
-            # Debug første rad
-            if debug and total_checked == 0:
-                print(
-                    f"  Debug: Første vare fra faktura - Nobbnr_raw={nobb_raw} (type={type(nobb_raw)}), normalized={nobb}")
-
-            total_checked += 1
-
-            # Sjekk om Nobbnr finnes i "Varer med Variasjon"
-            if nobb and nobb not in ['', 'nan', 'None'] and kol_fler_nobbnr:
-                treff = df_flere_kat[df_flere_kat[kol_fler_nobbnr] == nobb]
-
-                if debug and total_checked <= 3:
-                    print(f"  Debug: Søker etter Nobbnr='{nobb}' i 'Varer med Variasjon' - fant {len(treff)} treff")
-
-                if not treff.empty:
-                    match_count += 1
-                    # Hent alle unike kombinasjoner
-                    for _, kombo in treff.iterrows():
-                        var_resultat_rows.append({
-                            'Fakturanr': faktura,
-                            'Beløp': belop,
-                            'Nobbnr': nobb,
-                            'Artnr': art if art else '',
-                            'Spesifikasjon': kombo.get(kol_fler_spes, ''),
-                            'Fag': kombo.get(kol_fler_fag, ''),
-                            'Område': kombo.get(kol_fler_omr, ''),
-                            'Frikode': kombo.get(kol_fler_fri, ''),
-                            'Beskrivelse': kombo.get(kol_fler_besk, '') if kol_fler_besk else besk_faktura
-                        })
-                    continue
-
-            # Hvis ingen Nobbnr, sjekk Artnr
-            if art and art not in ['', 'nan', 'None'] and kol_fler_artnr:
-                if not nobb or nobb in ['', 'nan', 'None']:
-                    treff = df_flere_kat[df_flere_kat[kol_fler_artnr] == art]
-                    if not treff.empty:
-                        match_count += 1
-                        # Hent alle unike kombinasjoner
-                        for _, kombo in treff.iterrows():
-                            var_resultat_rows.append({
-                                'Fakturanr': faktura,
-                                'Beløp': belop,
-                                'Nobbnr': '',
-                                'Artnr': art,
-                                'Spesifikasjon': kombo.get(kol_fler_spes, ''),
-                                'Fag': kombo.get(kol_fler_fag, ''),
-                                'Område': kombo.get(kol_fler_omr, ''),
-                                'Frikode': kombo.get(kol_fler_fri, ''),
-                                'Beskrivelse': kombo.get(kol_fler_besk, '') if kol_fler_besk else besk_faktura
-                            })
-
-        print(f"  → Sjekket {total_checked} varer fra faktura, fant {match_count} med variasjon")
-
-        # Drop duplikater og sorter
-        if var_resultat_rows:
-            nobb_resultat = pd.DataFrame(var_resultat_rows).drop_duplicates()
-            nobb_resultat = nobb_resultat[desired_cols_var].sort_values(
-                by=["Fakturanr", "Nobbnr", "Artnr", "Spesifikasjon", "Fag", "Område", "Frikode"]
-            ).reset_index(drop=True)
-
-            # Tell unike varer og kombinasjoner
-            unike_varer = nobb_resultat[['Nobbnr', 'Artnr']].drop_duplicates()
-            print(f"  ✓ {len(nobb_resultat)} rader ({len(unike_varer)} unike varer med variasjon)")
-        else:
-            nobb_resultat = pd.DataFrame(columns=desired_cols_var)
-            print(f"  ℹ Ingen varer med variasjon funnet i fakturaen")
-    else:
-        nobb_resultat = pd.DataFrame(columns=desired_cols_var)
-        print(f"  ⚠ 'Varer med Variasjon'-fanen er tom")
-
-    # Sett opp mengder for markering i Vareoversikt
-    # Marker varer som finnes i "Varer med flere kategorier"
-    if not nobb_resultat.empty:
-        nobb_var_set = set(
-            nobb_resultat.loc[nobb_resultat["Nobbnr"].astype(str).str.strip() != "", "Nobbnr"].astype(str))
-        art_var_set = set(nobb_resultat.loc[(nobb_resultat["Nobbnr"].astype(str).str.strip() == "") &
-                                            (nobb_resultat["Artnr"].astype(str).str.strip() != ""), "Artnr"].astype(
-            str))
-    else:
-        nobb_var_set = set()
-        art_var_set = set()
-
-    # Marker rader som skal være GULE
-    # a) Nobbnr i variasjonsliste
-    nobb_i_variasjon = vareoversikt["Nobbnr"].astype(str).isin(nobb_var_set)
-
-    # b) Artnr i variasjonsliste når Nobbnr mangler på raden
-    nobb_mangler = serie_tom(vareoversikt["Nobbnr"])
-    art_i_variasjon_uten_nobb = vareoversikt["Artnr"].astype(str).isin(art_var_set) & nobb_mangler
-
-    # Total flagg
-    flag_vare_gul = nobb_i_variasjon | art_i_variasjon_uten_nobb
-
     # Kategorisert (unike kombinasjoner med summert beløp)
-    kategorisert_temp = vareoversikt.dropna(subset=["Spesifikasjon", "Fag", "Område", "Frikode"]).copy()
+    kategorisert_temp = vareoversikt.dropna(
+        subset=["Spesifikasjon", "Frikode"]
+    ).copy()
 
     if not kategorisert_temp.empty:
         kategorisert = (
             kategorisert_temp
-            .groupby(["Fakturanr", "Spesifikasjon", "Fag", "Område", "Frikode"], as_index=False)
+            .groupby(
+                ["Fakturanr", "Spesifikasjon", "Fag", "Frikode"],
+                as_index=False,
+            )
             .agg({"Beløp": "sum"})
             .rename(columns={"Beløp": "Summert Beløp"})
-            .sort_values(by=["Fakturanr", "Spesifikasjon", "Fag", "Område", "Frikode"])
+            .sort_values(by=["Fakturanr", "Spesifikasjon", "Fag", "Frikode"])
             .reset_index(drop=True)
         )
     else:
-        kategorisert = pd.DataFrame(columns=["Fakturanr", "Spesifikasjon", "Fag", "Område", "Frikode", "Summert Beløp"])
+        kategorisert = pd.DataFrame(
+            columns=[
+                "Fakturanr", "Spesifikasjon", "Fag", "Frikode",
+                "Summert Beløp",
+            ]
+        )
 
-    # --- PATCH: 100% robust KEY-join som tåler float/NaN/None ---
-    key_cols = ["Fakturanr", "Spesifikasjon", "Fag", "Område", "Frikode"]
-
-    # Sikre at key-kolonner finnes (i tilfelle upstream endringer)
-    for _kc in key_cols:
-        if _kc not in vareoversikt.columns:
-            vareoversikt[_kc] = ""
-    if not kategorisert.empty:
-        for _kc in key_cols:
-            if _kc not in kategorisert.columns:
-                kategorisert[_kc] = ""
-
-    def _safe_join_key(vals):
-        out = []
-        for v in vals:
-            if v is None:
-                out.append("")
-            else:
-                s = str(v)
-                out.append("" if s.lower() == "nan" else s)
-        return "\n".join(out)
-
-    # Bygg nøkler trygt
-    vareoversikt["_KEY"] = vareoversikt[key_cols].apply(lambda r: _safe_join_key(r.values.tolist()), axis=1)
-    if not kategorisert.empty:
-        kategorisert["_KEY"] = kategorisert[key_cols].apply(lambda r: _safe_join_key(r.values.tolist()), axis=1)
-        gul_keys = set(vareoversikt.loc[flag_vare_gul, "_KEY"].unique())
-        kat_gul = kategorisert["_KEY"].isin(gul_keys)
-    else:
-        kat_gul = pd.Series([], dtype=bool)
+    kategorisert["Område"] = ""
+    kategorisert = kategorisert[
+        [
+            "Fakturanr", "Spesifikasjon", "Fag", "Område",
+            "Frikode", "Summert Beløp",
+        ]
+    ]
 
     # Skriv til Excel
-    YELLOW = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
-
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
-        kategorisert.drop(columns=["_KEY"], errors="ignore").to_excel(writer, sheet_name="Kategorisert", index=False)
-        vareoversikt.drop(columns=["_KEY"], errors="ignore").to_excel(writer, sheet_name="Vareoversikt", index=False)
+        kategorisert.to_excel(writer, sheet_name="Kategorisert", index=False)
+        vareoversikt.to_excel(writer, sheet_name="Vareoversikt", index=False)
         ukjente_varer.to_excel(writer, sheet_name="Ukjente varer", index=False)
-        nobb_resultat.to_excel(writer, sheet_name="Varer med variasjon", index=False)
+        variasjoner.to_excel(writer, sheet_name="Varer med variasjon", index=False)
 
-    # Legg på gult fyll
     wb = load_workbook(output_file)
     ws_vare = wb["Vareoversikt"]
     ws_kat = wb["Kategorisert"]
     ws_var = wb["Varer med variasjon"]
-
-    n_cols_vare = ws_vare.max_column
-    for i, gul in enumerate(flag_vare_gul, start=2):
-        if gul:
-            for c in range(1, n_cols_vare + 1):
-                cell = ws_vare.cell(row=i, column=c)
-                if cell.value not in (None, ""):
-                    cell.fill = YELLOW
-
-    n_cols_kat = ws_kat.max_column
-    for i, gul in enumerate(kat_gul, start=2):
-        if gul:
-            for c in range(1, n_cols_kat + 1):
-                cell = ws_kat.cell(row=i, column=c)
-                if cell.value not in (None, ""):
-                    cell.fill = YELLOW
 
     ws_vare.freeze_panes = "A2"
     ws_kat.freeze_panes = "A2"
@@ -1182,6 +979,30 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
 # ============================================================================
 
 ProgressCallback = Optional[Callable[[float, str], None]]
+FAG_BY_CODE = {"0": "", "01": "RD", "05": "BE", "12": "TØ"}
+
+
+def assign_code_to_lines(
+    lines: pd.DataFrame, selected_rows: List[int], code: str
+) -> pd.DataFrame:
+    """Tildel en gyldig kode og tilhørende fag til valgte varelinjer."""
+    if code not in FAG_BY_CODE:
+        raise ValueError("Kode må være 0, 01, 05 eller 12.")
+    if not selected_rows:
+        raise ValueError("Velg minst én varelinje før du tildeler kode.")
+    if any(row < 0 or row >= len(lines) for row in selected_rows):
+        raise ValueError("Utvalget inneholder en ugyldig varelinje.")
+
+    updated = lines.copy()
+    if "Kode" not in updated.columns:
+        updated["Kode"] = ""
+    if "Fag" not in updated.columns:
+        updated["Fag"] = ""
+
+    selected_index = updated.index.take(selected_rows)
+    updated.loc[selected_index, "Kode"] = code
+    updated.loc[selected_index, "Fag"] = FAG_BY_CODE[code]
+    return updated
 
 
 def _safe_filename(name: str, fallback: str) -> str:
@@ -1217,14 +1038,14 @@ def _count_output_rows(output_file: Path) -> Dict[str, int]:
         workbook.close()
 
 
-def process_uploaded_files(
+def parse_uploaded_files(
     pdf_uploads: List[Any],
     category_upload: Any,
     debug: bool = False,
     progress_callback: ProgressCallback = None,
 ) -> Dict[str, Any]:
     """
-    Kjør hele behandlingsflyten og returner Excel-filen som bytes.
+    Les fakturalinjene fra PDF-filene, men vent med eksport til kodene er valgt.
 
     Alle opplastede filer lagres kun i en midlertidig mappe under kjøringen.
     Mappen slettes automatisk når behandlingen er ferdig.
@@ -1257,13 +1078,13 @@ def process_uploaded_files(
                 _write_uploaded_file(category_upload, category_path)
 
                 # Gi en tydelig feil før PDF-behandlingen dersom obligatorisk ark mangler.
-                category_workbook = pd.ExcelFile(category_path, engine="openpyxl")
-                if "Linjer" not in category_workbook.sheet_names:
-                    available = ", ".join(category_workbook.sheet_names) or "ingen"
-                    raise ValueError(
-                        "Kategoriseringsfilen mangler arket 'Linjer'. "
-                        f"Tilgjengelige ark: {available}."
-                    )
+                with pd.ExcelFile(category_path, engine="openpyxl") as category_workbook:
+                    if "Linjer" not in category_workbook.sheet_names:
+                        available = ", ".join(category_workbook.sheet_names) or "ingen"
+                        raise ValueError(
+                            "Kategoriseringsfilen mangler arket 'Linjer'. "
+                            f"Tilgjengelige ark: {available}."
+                        )
 
                 parser = InvoiceParser(debug=debug)
                 all_parsed_data: List[Dict] = []
@@ -1322,7 +1143,7 @@ def process_uploaded_files(
                         "Optimera-fakturaer med teksten 'Side X av Y'."
                     )
 
-                report(0.70, "Forbereder varelinjene …")
+                report(0.70, "Forbereder varelinjene for koding …")
                 df_parsed = pd.DataFrame(all_parsed_data)
 
                 # Behold samme normalisering som i skrivebordsversjonen.
@@ -1336,6 +1157,9 @@ def process_uploaded_files(
                 df_parsed = df_parsed.rename(
                     columns={"Nobb-nr": "Nobbnr", "Art-nr": "Artnr"}
                 )
+                df_parsed.insert(0, "Varelinje", range(1, len(df_parsed) + 1))
+                df_parsed["Kode"] = ""
+                df_parsed["Fag"] = ""
 
                 invoice_column = finn_kolonnenavn(df_parsed, "fakturanr")
                 invoice_count = (
@@ -1344,10 +1168,64 @@ def process_uploaded_files(
                     else 0
                 )
 
+                report(1.0, "Varelinjene er klare for koding")
+                return {
+                    "parsed_data": df_parsed,
+                    "parsed_lines": len(all_parsed_data),
+                    "invoice_count": invoice_count,
+                    "pdf_count": number_of_files,
+                    "relevant_pages": total_relevant_pages,
+                    "file_results": file_results,
+                    "log": log_buffer.getvalue(),
+                }
+    except Exception as exc:
+        # Loggen vises bare i appen når brukeren har slått på feilsøkingsmodus.
+        setattr(exc, "debug_log", log_buffer.getvalue())
+        raise
+
+
+def create_result(
+    parsed_result: Dict[str, Any],
+    category_upload: Any,
+    debug: bool = False,
+    progress_callback: ProgressCallback = None,
+) -> Dict[str, Any]:
+    """Bygg Excel-resultatet etter at alle fakturalinjer har fått en kode."""
+    if category_upload is None:
+        raise ValueError("Last opp kategoriseringsfilen.")
+
+    parsed_data = parsed_result["parsed_data"].copy()
+    if "Kode" not in parsed_data.columns or serie_tom(parsed_data["Kode"]).any():
+        raise ValueError("Alle varelinjer må få en kode før resultatet kan lages.")
+
+    invalid_codes = set(parsed_data["Kode"].astype(str)) - set(FAG_BY_CODE)
+    if invalid_codes:
+        raise ValueError(
+            "Ugyldige koder funnet: " + ", ".join(sorted(invalid_codes))
+        )
+    parsed_data["Fag"] = parsed_data["Kode"].astype(str).map(FAG_BY_CODE)
+
+    log_buffer = io.StringIO()
+
+    def report(value: float, message: str) -> None:
+        if progress_callback:
+            progress_callback(max(0.0, min(float(value), 1.0)), message)
+
+    category_suffix = Path(category_upload.name or "").suffix.lower()
+    if category_suffix not in {".xlsx", ".xlsm"}:
+        raise ValueError("Kategoriseringsfilen må være en .xlsx- eller .xlsm-fil.")
+
+    try:
+        with redirect_stdout(log_buffer):
+            with tempfile.TemporaryDirectory(prefix="optimera_streamlit_") as temp_dir:
+                work_dir = Path(temp_dir)
+                category_path = work_dir / ("kategorisering" + category_suffix)
+                _write_uploaded_file(category_upload, category_path)
                 output_path = work_dir / "Optimera_fakturaresultat.xlsx"
-                report(0.78, "Kategoriserer varelinjer og bygger Excel-filen …")
+
+                report(0.75, "Kategoriserer varelinjer og bygger Excel-filen …")
                 kategoriser_og_eksporter(
-                    df_parsed,
+                    parsed_data,
                     str(category_path),
                     str(output_path),
                     debug=debug,
@@ -1366,18 +1244,17 @@ def process_uploaded_files(
                 report(1.0, "Ferdig")
                 return {
                     "excel_bytes": excel_bytes,
-                    "parsed_lines": len(all_parsed_data),
-                    "invoice_count": invoice_count,
-                    "pdf_count": number_of_files,
-                    "relevant_pages": total_relevant_pages,
+                    "parsed_lines": parsed_result["parsed_lines"],
+                    "invoice_count": parsed_result["invoice_count"],
+                    "pdf_count": parsed_result["pdf_count"],
+                    "relevant_pages": parsed_result["relevant_pages"],
                     "row_counts": row_counts,
-                    "file_results": file_results,
+                    "file_results": parsed_result["file_results"],
                     "preview": preview,
-                    "log": log_buffer.getvalue(),
+                    "log": parsed_result["log"] + log_buffer.getvalue(),
                 }
     except Exception as exc:
-        # Loggen vises bare i appen når brukeren har slått på feilsøkingsmodus.
-        setattr(exc, "debug_log", log_buffer.getvalue())
+        setattr(exc, "debug_log", parsed_result["log"] + log_buffer.getvalue())
         raise
 
 
@@ -1398,8 +1275,8 @@ def main() -> None:
     st.title("Optimera fakturabehandling")
     st.write(
         "Last opp én eller flere Optimera-fakturaer og kategoriseringsfilen. "
-        "Appen parser fakturalinjene, kobler dem mot kategoriene og lager én "
-        "Excel-fil som kan lastes ned."
+        "Se gjennom varelinjene, tildel fagkode til hver linje og last deretter "
+        "ned Excel-resultatet."
     )
 
     with st.sidebar:
@@ -1452,17 +1329,17 @@ def main() -> None:
         _uploaded_files_signature(pdf_uploads, category_upload) if ready else None
     )
 
-    # Fjern et tidligere resultat dersom brukeren bytter inputfiler.
-    if (
-        "optimera_result" in st.session_state
-        and st.session_state.get("optimera_signature") != current_signature
-    ):
+    # Fjern parseresultat og eksport dersom brukeren bytter inputfiler.
+    if st.session_state.get("optimera_input_signature") != current_signature:
+        st.session_state.pop("optimera_parse_result", None)
         st.session_state.pop("optimera_result", None)
-        st.session_state.pop("optimera_signature", None)
+        st.session_state.pop("optimera_table_version", None)
+        st.session_state.pop("optimera_selected_code", None)
+        st.session_state["optimera_input_signature"] = current_signature
 
     st.subheader("3. Behandle")
-    run_clicked = st.button(
-        "Behandle fakturaer",
+    parse_clicked = st.button(
+        "Les fakturaer og vis varelinjer",
         type="primary",
         disabled=not ready,
         use_container_width=True,
@@ -1471,24 +1348,24 @@ def main() -> None:
     if not ready:
         st.caption("Last opp både PDF-fakturaer og kategoriseringsfil for å fortsette.")
 
-    if run_clicked:
+    if parse_clicked:
         progress = st.progress(0, text="Starter …")
 
         def update_progress(value: float, message: str) -> None:
             progress.progress(value, text=message)
 
         try:
-            result = process_uploaded_files(
+            parsed_result = parse_uploaded_files(
                 pdf_uploads=pdf_uploads,
                 category_upload=category_upload,
                 debug=debug,
                 progress_callback=update_progress,
             )
-            st.session_state["optimera_result"] = result
-            st.session_state["optimera_signature"] = current_signature
-        except Exception as exc:
+            st.session_state["optimera_parse_result"] = parsed_result
             st.session_state.pop("optimera_result", None)
-            st.session_state.pop("optimera_signature", None)
+        except Exception as exc:
+            st.session_state.pop("optimera_parse_result", None)
+            st.session_state.pop("optimera_result", None)
             progress.empty()
             st.error(f"Behandlingen stoppet: {exc}")
             if debug:
@@ -1499,22 +1376,120 @@ def main() -> None:
                 with st.expander("Full feilmelding", expanded=True):
                     st.code("".join(traceback.format_exception(exc)))
         else:
-            progress.progress(1.0, text="Ferdig")
+            progress.progress(1.0, text="Varelinjene er klare")
+
+    parsed_result = st.session_state.get("optimera_parse_result")
+    if parsed_result:
+        st.subheader("4. Gå gjennom varelinjene og tildel fag")
+        lines = parsed_result["parsed_data"]
+        table_version = int(st.session_state.get("optimera_table_version", 0))
+        display_columns = [
+            column for column in [
+                "Varelinje", "Fakturanr", "Nobbnr", "Artnr",
+                "Beskrivelse", "Beløp", "Kode", "Fag",
+            ]
+            if column in lines.columns
+        ]
+        table_event = st.dataframe(
+            lines[display_columns],
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="multi-row",
+            key=f"optimera_line_table_{table_version}",
+        )
+        selected_rows = table_event.selection.rows
+
+        code_labels = {
+            "": "Velg kode",
+            "0": "0 — ignorer kode og fag",
+            "01": "01 — RD",
+            "05": "05 — BE",
+            "12": "12 — TØ",
+        }
+        selected_code = st.selectbox(
+            "Kode for valgte varelinjer",
+            options=["", *FAG_BY_CODE],
+            format_func=lambda code: code_labels[code],
+            help="Velg én eller flere rader i tabellen, velg kode og tildel den.",
+            key="optimera_selected_code",
+        )
+        if st.button(
+            f"Tildel kode til {len(selected_rows)} valgte varelinjer",
+            disabled=not selected_rows or not selected_code,
+            key="optimera_assign_code",
+        ):
+            updated_lines = assign_code_to_lines(lines, selected_rows, selected_code)
+            parsed_result["parsed_data"] = updated_lines
+            st.session_state["optimera_parse_result"] = parsed_result
+            st.session_state.pop("optimera_result", None)
+            st.session_state["optimera_table_version"] = table_version + 1
+            st.rerun()
+
+        unassigned_mask = serie_tom(lines["Kode"])
+        unassigned_count = int(unassigned_mask.sum())
+        assigned_count = len(lines) - unassigned_count
+        st.write(f"Fagkode tildelt: {assigned_count} av {len(lines)} varelinjer.")
+        if unassigned_count:
+            st.warning(
+                f"{unassigned_count} varelinje(r) mangler kode. "
+                "Du må tildele en kode til alle linjer før summering."
+            )
+        else:
+            st.success("Alle varelinjer har fått en kode.")
+
+        with st.expander("Resultat per PDF"):
+            st.dataframe(
+                pd.DataFrame(parsed_result["file_results"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        if st.button(
+            "Fullfør koding og lag Excel-resultat",
+            type="primary",
+            disabled=unassigned_count > 0,
+            use_container_width=True,
+            key="optimera_create_result",
+        ):
+            progress = st.progress(0, text="Bygger Excel-resultatet …")
+
+            def update_export_progress(value: float, message: str) -> None:
+                progress.progress(value, text=message)
+
+            try:
+                result = create_result(
+                    parsed_result=parsed_result,
+                    category_upload=category_upload,
+                    debug=debug,
+                    progress_callback=update_export_progress,
+                )
+                st.session_state["optimera_result"] = result
+            except Exception as exc:
+                st.session_state.pop("optimera_result", None)
+                progress.empty()
+                st.error(f"Behandlingen stoppet: {exc}")
+                if debug:
+                    debug_log = getattr(exc, "debug_log", "")
+                    if debug_log:
+                        with st.expander("Teknisk logg", expanded=True):
+                            st.code(debug_log)
+                    with st.expander("Full feilmelding", expanded=True):
+                        st.code("".join(traceback.format_exception(exc)))
+            else:
+                progress.progress(1.0, text="Ferdig")
 
     result = st.session_state.get("optimera_result")
     if result:
         st.success("Fakturabehandlingen er ferdig.")
 
         row_counts = result["row_counts"]
-        metric_columns = st.columns(5)
+        metric_columns = st.columns(4)
         metric_columns[0].metric("PDF-filer", result["pdf_count"])
         metric_columns[1].metric("Fakturaer", result["invoice_count"])
         metric_columns[2].metric("Varelinjer", result["parsed_lines"])
         metric_columns[3].metric(
             "Ukjente varer", row_counts.get("Ukjente varer", 0)
-        )
-        metric_columns[4].metric(
-            "Variasjonsrader", row_counts.get("Varer med variasjon", 0)
         )
 
         st.download_button(
@@ -1545,8 +1520,9 @@ def main() -> None:
 
         st.caption(
             "Excel-filen inneholder arkene Kategorisert, Vareoversikt, "
-            "Ukjente varer og Varer med variasjon. Gul markering betyr at "
-            "varen har variasjon i kategoriseringen."
+            "Ukjente varer og et tomt ark for Varer med variasjon. "
+            "Fag er valgt i Streamlit. Kode 0 gir tomt fag, men beløpet "
+            "beholdes i summeringen."
         )
 
         if debug and result.get("log"):
