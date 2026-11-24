@@ -867,6 +867,8 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
 
     if "Fag" not in df_varelinjer_parsed.columns:
         df_varelinjer_parsed["Fag"] = ""
+    if "Område" not in df_varelinjer_parsed.columns:
+        df_varelinjer_parsed["Område"] = ""
 
     # Bygg Vareoversikt
     vareoversikt = pd.DataFrame({
@@ -878,7 +880,7 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
         "Fakturanr": df_varelinjer_parsed[kol_fakturanr],
         "Spesifikasjon": df_varelinjer_parsed["Spesifikasjon"],
         "Fag": df_varelinjer_parsed["Fag"],
-        "Område": "",
+        "Område": df_varelinjer_parsed["Område"],
         "Frikode": df_varelinjer_parsed["Frikode"],
         "Beskrivelse": df_varelinjer_parsed[kol_beskrivelse],
         "Beløp": pd.to_numeric(df_varelinjer_parsed[kol_beløp].apply(
@@ -932,23 +934,22 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
         kategorisert = (
             kategorisert_temp
             .groupby(
-                ["Fakturanr", "Spesifikasjon", "Fag", "Frikode"],
+                ["Fakturanr", "Spesifikasjon", "Fag", "Område", "Frikode"],
                 as_index=False,
             )
             .agg({"Beløp": "sum"})
             .rename(columns={"Beløp": "Summert Beløp"})
-            .sort_values(by=["Fakturanr", "Spesifikasjon", "Fag", "Frikode"])
+            .sort_values(by=["Fakturanr", "Spesifikasjon", "Fag", "Område", "Frikode"])
             .reset_index(drop=True)
         )
     else:
         kategorisert = pd.DataFrame(
             columns=[
-                "Fakturanr", "Spesifikasjon", "Fag", "Frikode",
+                "Fakturanr", "Spesifikasjon", "Fag", "Område", "Frikode",
                 "Summert Beløp",
             ]
         )
 
-    kategorisert["Område"] = ""
     kategorisert = kategorisert[
         [
             "Fakturanr", "Spesifikasjon", "Fag", "Område",
@@ -979,14 +980,14 @@ def kategoriser_og_eksporter(df_varelinjer_parsed: pd.DataFrame, varelinjer_kate
 # ============================================================================
 
 ProgressCallback = Optional[Callable[[float, str], None]]
-FAG_BY_CODE = {"0": "", "01": "RD", "05": "BE", "12": "TØ"}
+OMRADE_BY_CODE = {"0": "", "01": "RD", "05": "BE", "12": "TØ"}
 
 
 def assign_code_to_lines(
     lines: pd.DataFrame, selected_rows: List[int], code: str
 ) -> pd.DataFrame:
-    """Tildel en gyldig kode og tilhørende fag til valgte varelinjer."""
-    if code not in FAG_BY_CODE:
+    """Tildel kode, fag og område til valgte varelinjer."""
+    if code not in OMRADE_BY_CODE:
         raise ValueError("Kode må være 0, 01, 05 eller 12.")
     if not selected_rows:
         raise ValueError("Velg minst én varelinje før du tildeler kode.")
@@ -998,10 +999,13 @@ def assign_code_to_lines(
         updated["Kode"] = ""
     if "Fag" not in updated.columns:
         updated["Fag"] = ""
+    if "Område" not in updated.columns:
+        updated["Område"] = ""
 
     selected_index = updated.index.take(selected_rows)
     updated.loc[selected_index, "Kode"] = code
-    updated.loc[selected_index, "Fag"] = FAG_BY_CODE[code]
+    updated.loc[selected_index, "Fag"] = "" if code == "0" else code
+    updated.loc[selected_index, "Område"] = OMRADE_BY_CODE[code]
     return updated
 
 
@@ -1160,6 +1164,7 @@ def parse_uploaded_files(
                 df_parsed.insert(0, "Varelinje", range(1, len(df_parsed) + 1))
                 df_parsed["Kode"] = ""
                 df_parsed["Fag"] = ""
+                df_parsed["Område"] = ""
 
                 invoice_column = finn_kolonnenavn(df_parsed, "fakturanr")
                 invoice_count = (
@@ -1198,12 +1203,13 @@ def create_result(
     if "Kode" not in parsed_data.columns or serie_tom(parsed_data["Kode"]).any():
         raise ValueError("Alle varelinjer må få en kode før resultatet kan lages.")
 
-    invalid_codes = set(parsed_data["Kode"].astype(str)) - set(FAG_BY_CODE)
+    invalid_codes = set(parsed_data["Kode"].astype(str)) - set(OMRADE_BY_CODE)
     if invalid_codes:
         raise ValueError(
             "Ugyldige koder funnet: " + ", ".join(sorted(invalid_codes))
         )
-    parsed_data["Fag"] = parsed_data["Kode"].astype(str).map(FAG_BY_CODE)
+    parsed_data["Fag"] = parsed_data["Kode"].astype(str).replace("0", "")
+    parsed_data["Område"] = parsed_data["Kode"].astype(str).map(OMRADE_BY_CODE)
 
     log_buffer = io.StringIO()
 
@@ -1238,6 +1244,7 @@ def create_result(
                     sheet_name="Vareoversikt",
                     engine="openpyxl",
                     nrows=100,
+                    dtype={"Fag": str},
                 )
                 excel_bytes = output_path.read_bytes()
 
@@ -1386,7 +1393,7 @@ def main() -> None:
         display_columns = [
             column for column in [
                 "Varelinje", "Fakturanr", "Nobbnr", "Artnr",
-                "Beskrivelse", "Beløp", "Kode", "Fag",
+                "Beskrivelse", "Beløp", "Kode", "Fag", "Område",
             ]
             if column in lines.columns
         ]
@@ -1402,14 +1409,14 @@ def main() -> None:
 
         code_labels = {
             "": "Velg kode",
-            "0": "0 — ignorer kode og fag",
+            "0": "0 — tomt fag og område",
             "01": "01 — RD",
             "05": "05 — BE",
             "12": "12 — TØ",
         }
         selected_code = st.selectbox(
             "Kode for valgte varelinjer",
-            options=["", *FAG_BY_CODE],
+            options=["", *OMRADE_BY_CODE],
             format_func=lambda code: code_labels[code],
             help="Velg én eller flere rader i tabellen, velg kode og tildel den.",
             key="optimera_selected_code",
@@ -1521,7 +1528,7 @@ def main() -> None:
         st.caption(
             "Excel-filen inneholder arkene Kategorisert, Vareoversikt, "
             "Ukjente varer og et tomt ark for Varer med variasjon. "
-            "Fag er valgt i Streamlit. Kode 0 gir tomt fag, men beløpet "
+            "Kode 0 gir tomt fag og område, men beløpet "
             "beholdes i summeringen."
         )
 
